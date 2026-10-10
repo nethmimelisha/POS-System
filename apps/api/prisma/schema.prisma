@@ -1,0 +1,553 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  CASHIER
+}
+
+enum TaxType {
+  STANDARD
+  ZERO_RATED
+  EXEMPT
+}
+
+enum StockMovementType {
+  OPENING
+  PURCHASE
+  SALE
+  RETURN_IN
+  RETURN_OUT
+  ADJUSTMENT
+  DAMAGE
+}
+
+enum SaleStatus {
+  HELD
+  COMPLETED
+  VOIDED
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  ORDERED
+  PARTIAL
+  RECEIVED
+  CANCELLED
+}
+
+// Single business: one row, id = 1.
+model BusinessSettings {
+  id                 Int      @id @default(1)
+  name               String   @default("My Store")
+  address            String?
+  phone              String?
+  vatNumber          String?
+  currencyCode       String   @default("LKR")
+  currencySymbol     String   @default("Rs.")
+  taxEnabled         Boolean  @default(false) // off until VAT registration is confirmed
+  pricesIncludeTax   Boolean  @default(true)
+  allowNegativeStock Boolean  @default(false)
+  timezone           String   @default("Asia/Colombo") // store timezone used for report day/week/month boundaries
+  requireShift       Boolean  @default(false) // when true, sales and cash refunds need an open shift on the register
+  receiptHeader      String?
+  receiptFooter      String?
+  updatedAt          DateTime @updatedAt
+}
+
+model User {
+  id           String    @id @default(uuid())
+  username     String    @unique
+  fullName     String
+  email        String?   @unique
+  passwordHash String
+  role         Role
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  sessions         Session[]
+  auditLogs        AuditLog[]
+  stockMovements   StockMovement[]
+  sales            Sale[]
+  shiftsWorked     Shift[]         @relation("ShiftCashier")
+  shiftsOpened     Shift[]         @relation("ShiftOpenedBy")
+  shiftsClosed     Shift[]         @relation("ShiftClosedBy")
+  shiftsApproved   Shift[]         @relation("ShiftApprovedBy")
+  cashMovements    CashMovement[]
+  returnsProcessed SaleReturn[]
+  salesVoided      Sale[]          @relation("SaleVoidedBy")
+  exchanges        Exchange[]      @relation("ExchangeProcessedBy")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  userAgent String?
+  ip        String?
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model AuditLog {
+  id         BigInt   @id @default(autoincrement())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  action     String
+  entityType String?
+  entityId   String?
+  details    Json?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model TaxRate {
+  id       Int       @id @default(autoincrement())
+  name     String    @unique
+  type     TaxType   @default(STANDARD)
+  ratePct  Decimal   @default(0) @db.Decimal(6, 3)
+  isActive Boolean   @default(true)
+  products Product[]
+}
+
+model Category {
+  id       Int        @id @default(autoincrement())
+  name     String
+  parentId Int?
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryTree")
+  isActive Boolean    @default(true)
+  products Product[]
+
+  @@unique([parentId, name])
+}
+
+model Brand {
+  id       Int       @id @default(autoincrement())
+  name     String    @unique
+  products Product[]
+}
+
+model Product {
+  id          String    @id @default(uuid())
+  name        String
+  description String?
+  categoryId  Int?
+  category    Category? @relation(fields: [categoryId], references: [id])
+  brandId     Int?
+  brand       Brand?    @relation(fields: [brandId], references: [id])
+  taxRateId   Int?
+  taxRate     TaxRate?  @relation(fields: [taxRateId], references: [id])
+  unit        String    @default("pcs")
+  imageUrl    String?
+  trackStock  Boolean   @default(true)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  variants ProductVariant[]
+
+  @@index([name])
+  @@index([categoryId])
+}
+
+// Every product has at least one variant (a default one when there are no options).
+model ProductVariant {
+  id           String   @id @default(uuid())
+  productId    String
+  product      Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sku          String   @unique
+  name         String?
+  costPrice    Decimal  @default(0) @db.Decimal(12, 2)
+  sellPrice    Decimal  @db.Decimal(12, 2)
+  reorderLevel Decimal  @default(0) @db.Decimal(12, 3)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  barcodes       VariantBarcode[]
+  stockLevel     StockLevel?
+  stockMovements StockMovement[]
+  saleItems      SaleItem[]
+  returnItems    ReturnItem[]
+  poItems        PurchaseOrderItem[]
+
+  @@index([productId])
+}
+
+model VariantBarcode {
+  barcode   String         @id
+  variantId String
+  variant   ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@index([variantId])
+}
+
+// Append-only ledger. quantity is signed.
+model StockMovement {
+  id            BigInt            @id @default(autoincrement())
+  variantId     String
+  variant       ProductVariant    @relation(fields: [variantId], references: [id])
+  type          StockMovementType
+  quantity      Decimal           @db.Decimal(12, 3)
+  unitCost      Decimal?          @db.Decimal(12, 2)
+  referenceType String?
+  referenceId   String?
+  reason        String?
+  createdById   String?
+  createdBy     User?             @relation(fields: [createdById], references: [id])
+  createdAt     DateTime          @default(now())
+
+  @@index([variantId, createdAt])
+}
+
+// Balance kept in sync with the ledger inside the same transaction.
+model StockLevel {
+  variantId String         @id
+  variant   ProductVariant @relation(fields: [variantId], references: [id])
+  onHand    Decimal        @default(0) @db.Decimal(12, 3)
+  updatedAt DateTime       @updatedAt
+}
+
+model Supplier {
+  id       Int             @id @default(autoincrement())
+  name     String
+  phone    String?
+  email    String?
+  address  String?
+  isActive Boolean         @default(true)
+  orders   PurchaseOrder[]
+}
+
+model PurchaseOrder {
+  id         Int                 @id @default(autoincrement())
+  poNumber   String              @unique
+  supplierId Int
+  supplier   Supplier            @relation(fields: [supplierId], references: [id])
+  status     PurchaseOrderStatus @default(DRAFT)
+  notes      String?
+  createdAt  DateTime            @default(now())
+  items      PurchaseOrderItem[]
+}
+
+model PurchaseOrderItem {
+  id          Int            @id @default(autoincrement())
+  poId        Int
+  po          PurchaseOrder  @relation(fields: [poId], references: [id], onDelete: Cascade)
+  variantId   String
+  variant     ProductVariant @relation(fields: [variantId], references: [id])
+  qtyOrdered  Decimal        @db.Decimal(12, 3)
+  qtyReceived Decimal        @default(0) @db.Decimal(12, 3)
+  unitCost    Decimal        @db.Decimal(12, 2)
+}
+
+model Customer {
+  id            String       @id @default(uuid())
+  name          String
+  phone         String?      @unique
+  email         String?
+  loyaltyPoints Int          @default(0)
+  notes         String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @default(now()) @updatedAt
+  sales         Sale[]
+  returns       SaleReturn[]
+}
+
+model Register {
+  id       Int          @id @default(autoincrement())
+  name     String       @unique
+  isActive Boolean      @default(true)
+  sales    Sale[]
+  shifts   Shift[]
+  returns  SaleReturn[]
+}
+
+model PaymentMethod {
+  id       Int            @id @default(autoincrement())
+  code     String         @unique
+  name     String
+  isCash   Boolean        @default(false)
+  isActive Boolean        @default(true)
+  // Internal methods (exchange credit) are never offered to cashiers and are left out of cash and payment reports.
+  isSystem Boolean        @default(false)
+  payments SalePayment[]
+  refunds  ReturnRefund[]
+}
+
+// id is client-generated, which makes sale submission idempotent.
+model Sale {
+  id            String     @id
+  saleNumber    String     @unique
+  status        SaleStatus @default(COMPLETED)
+  registerId    Int?
+  register      Register?  @relation(fields: [registerId], references: [id])
+  cashierId     String
+  cashier       User       @relation(fields: [cashierId], references: [id])
+  customerId    String?
+  customer      Customer?  @relation(fields: [customerId], references: [id])
+  shiftId       Int?
+  shift         Shift?     @relation(fields: [shiftId], references: [id])
+  subtotal      Decimal    @default(0) @db.Decimal(12, 2)
+  discountTotal Decimal    @default(0) @db.Decimal(12, 2)
+  taxTotal      Decimal    @default(0) @db.Decimal(12, 2)
+  rounding      Decimal    @default(0) @db.Decimal(12, 2)
+  grandTotal    Decimal    @default(0) @db.Decimal(12, 2)
+  amountPaid    Decimal    @default(0) @db.Decimal(12, 2)
+  changeGiven   Decimal    @default(0) @db.Decimal(12, 2)
+  notes         String?
+  requestHash   String? // fingerprint of the checkout payload, for idempotency
+  createdAt     DateTime   @default(now())
+  completedAt   DateTime?
+  voidedAt      DateTime?
+  voidedById    String?
+  voidedBy      User?      @relation("SaleVoidedBy", fields: [voidedById], references: [id])
+  voidReason    String?
+
+  items          SaleItem[]
+  payments       SalePayment[]
+  returns        SaleReturn[]
+  exchangesFrom  Exchange[]  @relation("ExchangeOriginal")
+  exchangeIssued Exchange?   @relation("ExchangeNew")
+
+  @@index([shiftId])
+  @@index([customerId])
+  @@index([createdAt])
+  @@index([cashierId])
+  @@index([registerId])
+}
+
+// Description, SKU, price, cost and tax are snapshots taken at sale time.
+model SaleItem {
+  id          BigInt         @id @default(autoincrement())
+  saleId      String
+  sale        Sale           @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  variantId   String
+  variant     ProductVariant @relation(fields: [variantId], references: [id])
+  description String
+  sku         String
+  quantity    Decimal        @db.Decimal(12, 3)
+  unitPrice   Decimal        @db.Decimal(12, 2)
+  unitCost    Decimal        @default(0) @db.Decimal(12, 2)
+  discount    Decimal        @default(0) @db.Decimal(12, 2)
+  taxRatePct  Decimal        @default(0) @db.Decimal(6, 3)
+  taxAmount   Decimal        @default(0) @db.Decimal(12, 2)
+  lineTotal   Decimal        @db.Decimal(12, 2)
+  returnItems ReturnItem[]
+
+  @@index([saleId])
+  @@index([variantId])
+}
+
+model SalePayment {
+  id        BigInt        @id @default(autoincrement())
+  saleId    String
+  sale      Sale          @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  methodId  Int
+  method    PaymentMethod @relation(fields: [methodId], references: [id])
+  amount    Decimal       @db.Decimal(12, 2)
+  reference String?
+  createdAt DateTime      @default(now())
+
+  @@index([saleId])
+}
+
+// Gapless document numbering; incremented inside the sale transaction.
+model DocumentCounter {
+  key   String @id
+  value Int    @default(0)
+}
+
+enum ShiftStatus {
+  OPEN
+  CLOSED
+}
+
+enum DiscrepancyStatus {
+  NONE
+  PENDING_APPROVAL
+  APPROVED
+}
+
+enum CashMovementType {
+  CASH_IN
+  CASH_OUT
+}
+
+enum ReturnReason {
+  DEFECTIVE
+  DAMAGED
+  WRONG_ITEM
+  CHANGED_MIND
+  OVERCHARGED
+  OTHER
+}
+
+enum RefundStatus {
+  COMPLETED // cash handed over, or external refund confirmed by the provider
+  PENDING // card/online refund requested; waiting for provider confirmation
+  FAILED
+}
+
+// A cashier's working session on one register. openRegisterId / openCashierId are set only while
+// the shift is open; their unique constraints stop two open shifts on one register (or one cashier)
+// even when requests arrive simultaneously.
+model Shift {
+  id             Int               @id @default(autoincrement())
+  registerId     Int
+  register       Register          @relation(fields: [registerId], references: [id])
+  cashierId      String
+  cashier        User              @relation("ShiftCashier", fields: [cashierId], references: [id])
+  openedById     String
+  openedBy       User              @relation("ShiftOpenedBy", fields: [openedById], references: [id])
+  openedAt       DateTime          @default(now())
+  openingCash    Decimal           @db.Decimal(12, 2)
+  status         ShiftStatus       @default(OPEN)
+  openRegisterId Int?              @unique
+  openCashierId  String?           @unique
+  closedAt       DateTime?
+  closedById     String?
+  closedBy       User?             @relation("ShiftClosedBy", fields: [closedById], references: [id])
+  expectedCash   Decimal?          @db.Decimal(12, 2) // snapshot taken at close
+  countedCash    Decimal?          @db.Decimal(12, 2)
+  variance       Decimal?          @db.Decimal(12, 2) // counted - expected: negative = shortage, positive = overage
+  closingNotes   String?
+  discrepancy    DiscrepancyStatus @default(NONE)
+  approvedById   String?
+  approvedBy     User?             @relation("ShiftApprovedBy", fields: [approvedById], references: [id])
+  approvedAt     DateTime?
+  approvalNote   String?
+
+  sales     Sale[]
+  returns   SaleReturn[]
+  movements CashMovement[]
+
+  @@index([registerId, openedAt])
+  @@index([cashierId])
+  @@index([openedAt])
+}
+
+model CashMovement {
+  id          Int              @id @default(autoincrement())
+  shiftId     Int
+  shift       Shift            @relation(fields: [shiftId], references: [id])
+  type        CashMovementType
+  amount      Decimal          @db.Decimal(12, 2)
+  reason      String
+  createdById String
+  createdBy   User             @relation(fields: [createdById], references: [id])
+  createdAt   DateTime         @default(now())
+
+  @@index([shiftId])
+}
+
+// id is client-generated so a retried return can never refund twice.
+model SaleReturn {
+  id            String       @id
+  returnNumber  String       @unique
+  saleId        String
+  sale          Sale         @relation(fields: [saleId], references: [id])
+  registerId    Int?
+  register      Register?    @relation(fields: [registerId], references: [id])
+  shiftId       Int?
+  shift         Shift?       @relation(fields: [shiftId], references: [id])
+  processedById String
+  processedBy   User         @relation(fields: [processedById], references: [id])
+  customerId    String?
+  customer      Customer?    @relation(fields: [customerId], references: [id])
+  reason        ReturnReason
+  notes         String?
+  subtotal      Decimal      @db.Decimal(12, 2) // refunded value before tax added back (exclusive pricing) - informational
+  taxTotal      Decimal      @db.Decimal(12, 2)
+  refundTotal   Decimal      @db.Decimal(12, 2)
+  requestHash   String?
+  createdAt     DateTime     @default(now())
+
+  items    ReturnItem[]
+  refunds  ReturnRefund[]
+  exchange Exchange?
+
+  @@index([saleId])
+  @@index([createdAt])
+  @@index([shiftId])
+}
+
+model ReturnItem {
+  id             BigInt         @id @default(autoincrement())
+  returnId       String
+  return         SaleReturn     @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  saleItemId     BigInt
+  saleItem       SaleItem       @relation(fields: [saleItemId], references: [id])
+  variantId      String
+  variant        ProductVariant @relation(fields: [variantId], references: [id])
+  description    String
+  sku            String
+  quantity       Decimal        @db.Decimal(12, 3)
+  taxAmount      Decimal        @db.Decimal(12, 2)
+  refundAmount   Decimal        @db.Decimal(12, 2)
+  discountAmount Decimal        @default(0) @db.Decimal(12, 2) // share of the original discount given back
+  resellable     Boolean
+  restocked      Boolean        @default(false)
+
+  @@index([returnId])
+  @@index([saleItemId])
+}
+
+model ReturnRefund {
+  id                Int           @id @default(autoincrement())
+  returnId          String
+  return            SaleReturn    @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  methodId          Int
+  method            PaymentMethod @relation(fields: [methodId], references: [id])
+  amount            Decimal       @db.Decimal(12, 2)
+  status            RefundStatus
+  reference         String?
+  providerReference String?
+  resolvedById      String?
+  resolvedAt        DateTime?
+  failureReason     String?
+  createdAt         DateTime      @default(now())
+
+  @@index([returnId])
+  @@index([status])
+}
+
+// An exchange is a return of items from an earlier sale plus a new sale for the replacements, settled in one transaction.
+// Both documents are real records, so reports, stock and the cash drawer need no special handling.
+model Exchange {
+  id             String     @id // client-generated, which makes the request idempotent
+  exchangeNumber String     @unique
+  originalSaleId String
+  originalSale   Sale       @relation("ExchangeOriginal", fields: [originalSaleId], references: [id])
+  returnId       String     @unique
+  return         SaleReturn @relation(fields: [returnId], references: [id])
+  newSaleId      String     @unique
+  newSale        Sale       @relation("ExchangeNew", fields: [newSaleId], references: [id])
+  registerId     Int?
+  processedById  String
+  processedBy    User       @relation("ExchangeProcessedBy", fields: [processedById], references: [id])
+  returnedValue  Decimal    @db.Decimal(12, 2)
+  issuedValue    Decimal    @db.Decimal(12, 2)
+  difference     Decimal    @db.Decimal(12, 2) // issued - returned: positive = customer paid more, negative = customer was refunded
+  requestHash    String?
+  createdAt      DateTime   @default(now())
+
+  @@index([originalSaleId])
+  @@index([createdAt])
+}

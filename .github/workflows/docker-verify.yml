@@ -1,0 +1,46 @@
+name: docker-verify
+# Builds and runs the production images on a Docker-capable runner. Manual only; never deploys.
+on: workflow_dispatch
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      COMPOSE: docker compose --env-file deploy/.env.production -f deploy/docker-compose.prod.yml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Create throwaway production env
+        run: |
+          cp deploy/.env.production.example deploy/.env.production
+          PW=$(openssl rand -hex 24)
+          sed -i "s|CHANGE_ME_LONG_UNIQUE_DATABASE_PASSWORD|$PW|" deploy/.env.production
+          sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgresql://pos:$PW@db:5432/pos?schema=public|" deploy/.env.production
+          sed -i "s|CHANGE_ME_BASE64_32_BYTE_KEY|$(openssl rand -base64 32)|" deploy/.env.production
+      - name: Build images
+        run: $COMPOSE build
+      - name: Start stack (db, migrate, api, backup, web)
+        run: $COMPOSE up -d db migrate api backup web
+      - name: Wait for API healthy
+        run: |
+          for i in $(seq 1 40); do
+            [ "$($COMPOSE ps --format '{{.Health}}' api)" = "healthy" ] && exit 0; sleep 3
+          done
+          $COMPOSE logs; exit 1
+      - name: Provision admin and check endpoints
+        run: |
+          $COMPOSE run --rm -e ADMIN_PASSWORD='Verify-Pass-12345!' api node dist/src/ops/provisionAdmin.js --username owner --full-name 'CI Owner'
+          $COMPOSE exec -T api node -e "fetch('http://127.0.0.1:4000/health').then(r=>r.json()).then(console.log)"
+          $COMPOSE exec -T api node -e "fetch('http://127.0.0.1:4000/ready').then(r=>r.json()).then(console.log)"
+      - name: Backup and verified restore in containers
+        run: |
+          $COMPOSE exec -T backup node dist/src/ops/backup.js
+          $COMPOSE exec -T backup node dist/src/ops/verifyRestore.js
+      - name: Dump logs
+        if: always()
+        run: $COMPOSE logs --no-color
+      - name: Tear down
+        if: always()
+        run: $COMPOSE down -v

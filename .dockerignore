@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+**/.local-pg
+**/e2e-results
+**/test-results
+**/screenshots
+.env
+.env.*
+**/.env
+**/.env.*
+*.log

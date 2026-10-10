@@ -1,0 +1,113 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+
+  --color-navy-50: #f1f5fb;
+  --color-navy-100: #e0e8f5;
+  --color-navy-200: #c3d1ea;
+  --color-navy-300: #97afd8;
+  --color-navy-400: #6585c0;
+  --color-navy-500: #4264a8;
+  --color-navy-600: #2f4c8c;
+  --color-navy-700: #263e72;
+  --color-navy-800: #1f315c;
+  --color-navy-900: #14295b;
+  --color-navy-950: #0c1a3d;
+
+  --radius-card: 0.875rem;
+  --shadow-card: 0 1px 2px rgb(12 26 61 / 0.06), 0 4px 16px rgb(12 26 61 / 0.05);
+  --shadow-pop: 0 10px 40px rgb(12 26 61 / 0.18);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-slate-50 text-slate-800 antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+  button:not(:disabled),
+  [role="button"] {
+    cursor: pointer;
+  }
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-navy-500;
+  }
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 80 mm thermal receipt printing ---------- */
+#print-root {
+  display: none;
+}
+
+@page {
+  size: 80mm auto;
+  margin: 0;
+}
+
+@media print {
+  html,
+  body {
+    background: #fff !important;
+    height: auto !important;
+  }
+  body > *:not(#print-root) {
+    display: none !important;
+  }
+  #print-root {
+    display: block !important;
+  }
+}
+
+.receipt {
+  width: 72mm;
+  margin: 0 auto;
+  padding: 3mm 0 6mm;
+  color: #000;
+  background: #fff;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+.receipt h1 {
+  font-size: 15px;
+  font-weight: 700;
+  text-align: center;
+  margin: 0 0 2px;
+}
+.receipt .center {
+  text-align: center;
+}
+.receipt .rule {
+  border: 0;
+  border-top: 1px dashed #000;
+  margin: 5px 0;
+}
+.receipt .row {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+.receipt .row > span:last-child {
+  text-align: right;
+  white-space: nowrap;
+}
+.receipt .strong {
+  font-weight: 700;
+}
+.receipt .big {
+  font-size: 14px;
+  font-weight: 700;
+}
+.receipt .muted {
+  font-size: 10.5px;
+}

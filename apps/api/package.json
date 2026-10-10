@@ -1,0 +1,57 @@
+{
+    "name":  "pos-api",
+    "version":  "0.1.0",
+    "private":  true,
+    "type":  "module",
+    "scripts":  {
+                    "dev":  "tsx watch src/server.ts",
+                    "local":  "tsx scripts/local-server.ts",
+                    "build":  "tsc -p tsconfig.build.json",
+                    "start":  "node dist/src/server.js",
+                    "typecheck":  "tsc --noEmit -p .",
+                    "test":  "vitest run",
+                    "prisma:generate":  "prisma generate",
+                    "prisma:migrate":  "prisma migrate dev",
+                    "prisma:deploy":  "prisma migrate deploy",
+                    "seed":  "tsx prisma/seed.ts",
+                    "migrate:deploy":  "prisma migrate deploy",
+                    "provision:admin":  "tsx src/ops/provisionAdmin.ts",
+                    "backup":  "tsx src/ops/backup.ts",
+                    "backup:check":  "tsx src/ops/backupCheck.ts",
+                    "backup:schedule":  "tsx src/ops/backupScheduler.ts",
+                    "restore":  "tsx src/ops/restore.ts",
+                    "restore:verify":  "tsx src/ops/verifyRestore.ts",
+                    "loadtest":  "tsx scripts/loadtest.ts"
+                },
+    "prisma":  {
+                   "seed":  "tsx prisma/seed.ts"
+               },
+    "dependencies":  {
+                         "@prisma/client":  "^6.0.0",
+                         "bcryptjs":  "^2.4.3",
+                         "cookie-parser":  "^1.4.6",
+                         "cors":  "^2.8.5",
+                         "dotenv":  "^16.4.5",
+                         "express":  "^4.19.2",
+                         "express-rate-limit":  "^7.4.0",
+                         "helmet":  "^7.1.0",
+                         "pdfkit":  "^0.20.2",
+                         "pino":  "^10.4.0",
+                         "zod":  "^3.23.8"
+                     },
+    "devDependencies":  {
+                            "@types/bcryptjs":  "^2.4.6",
+                            "@types/cookie-parser":  "^1.4.7",
+                            "@types/cors":  "^2.8.17",
+                            "@types/express":  "^4.17.21",
+                            "@types/node":  "^20.14.0",
+                            "@types/pdfkit":  "^0.17.6",
+                            "@types/supertest":  "^6.0.2",
+                            "embedded-postgres":  "^18.4.0-beta.17",
+                            "prisma":  "^6.0.0",
+                            "supertest":  "^7.0.0",
+                            "tsx":  "^4.16.0",
+                            "typescript":  "^5.5.0",
+                            "vitest":  "^2.0.0"
+                        }
+}

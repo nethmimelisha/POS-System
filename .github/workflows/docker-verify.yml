@@ -1,51 +1,114 @@
+
 name: docker-verify
-# Builds and runs the production images on a Docker-capable runner. Manual only; never deploys.
-on: workflow_dispatch
+
+# Builds and tests production Docker images.
+# Manual execution only. Does not deploy to production.
+
+on:
+  workflow_dispatch:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    name: Verify production Docker stack
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
+
     env:
       COMPOSE: docker compose --env-file deploy/.env.production -f deploy/docker-compose.prod.yml
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - name: Create throwaway production env
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Create throwaway production environment
+        shell: bash
         run: |
           cp deploy/.env.production.example deploy/.env.production
+
           PW=$(openssl rand -hex 24)
+
           sed -i "s|CHANGE_ME_LONG_UNIQUE_DATABASE_PASSWORD|$PW|" deploy/.env.production
+
           sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgresql://pos:$PW@db:5432/pos?schema=public|" deploy/.env.production
+
           sed -i "s|CHANGE_ME_BASE64_32_BYTE_KEY|$(openssl rand -base64 32)|" deploy/.env.production
-      - name: Build images
-        run: $COMPOSE build
-      - name: Start stack (db, migrate, api, backup, web)
-        run: $COMPOSE up -d db migrate api backup web
-      - name: Wait for API healthy
+
+      - name: Build Docker images
+        shell: bash
+        run: |
+          $COMPOSE build
+
+      - name: Start production Docker stack
+        shell: bash
+        run: |
+          $COMPOSE up -d db migrate api backup web
+
+      - name: Wait for API to become healthy
+        shell: bash
         run: |
           for i in $(seq 1 40); do
-            [ "$($COMPOSE ps --format '{{.Health}}' api)" = "healthy" ] && exit 0; sleep 3
+            if [ "$($COMPOSE ps --format '{{.Health}}' api)" = "healthy" ]; then
+              echo "API is healthy"
+              exit 0
+            fi
+
+            echo "Waiting for API health check ($i/40)..."
+            sleep 3
           done
-          $COMPOSE logs; exit 1
-      - name: Provision admin with a temporary strong password
+
+          echo "API did not become healthy"
+          $COMPOSE logs --no-color
+          exit 1
+
+      - name: Provision temporary administrator
+        shell: bash
         run: |
           PW="Vf-$(openssl rand -hex 16)-Aa1!"
+
           echo "::add-mask::$PW"
           echo "VERIFY_ADMIN_PASSWORD=$PW" >> "$GITHUB_ENV"
-          $COMPOSE run --rm -e ADMIN_PASSWORD="$PW" api node dist/src/ops/provisionAdmin.js --username owner --full-name 'CI Owner'
-      - name: Health, readiness, auth and authenticated checkout in container
-        run: $COMPOSE exec -T -e VERIFY_ADMIN_PASSWORD="$VERIFY_ADMIN_PASSWORD" api node - < deploy/verify-checkout.mjs
-      - name: Web (nginx) serves the frontend and proxies the API
+
+          $COMPOSE run --rm \
+            -e ADMIN_PASSWORD="$PW" \
+            api node dist/src/ops/provisionAdmin.js \
+            --username owner \
+            --full-name 'CI Owner'
+
+      - name: Verify API health, authentication and checkout
+        shell: bash
         run: |
-          $COMPOSE exec -T web wget -qO- http://127.0.0.1:8080/ | head -c 200 || $COMPOSE exec -T web wget -qO- http://127.0.0.1/ | head -c 200      - name: Backup and verified restore in containers
+          $COMPOSE exec -T \
+            -e VERIFY_ADMIN_PASSWORD="$VERIFY_ADMIN_PASSWORD" \
+            api node - < deploy/verify-checkout.mjs
+
+      - name: Verify web frontend and nginx
+        shell: bash
+        run: |
+          $COMPOSE exec -T web \
+            wget -qO- http://127.0.0.1:8080/ | head -c 200 \
+            || $COMPOSE exec -T web \
+            wget -qO- http://127.0.0.1/ | head -c 200
+
+      - name: Verify database backup and restore
+        shell: bash
         run: |
           $COMPOSE exec -T backup node dist/src/ops/backup.js
+
           $COMPOSE exec -T backup node dist/src/ops/verifyRestore.js
-      - name: Dump logs
+
+      - name: Dump Docker logs
         if: always()
-        run: $COMPOSE logs --no-color
-      - name: Tear down
+        shell: bash
+        run: |
+          $COMPOSE logs --no-color
+
+      - name: Tear down test environment
         if: always()
-        run: $COMPOSE down -v
+        shell: bash
+        run: |
+          $COMPOSE down -v

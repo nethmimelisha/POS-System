@@ -39,7 +39,7 @@ COPY --from=build /app/apps/api/prisma ./prisma
 COPY --from=build /app/apps/api/node_modules/.prisma ./node_modules/.prisma
 COPY --from=build /app/apps/api/node_modules/@prisma/client ./node_modules/@prisma/client
 
-RUN chown -R node:node /app/apps/api
+RUN mkdir -p /backups && chown -R node:node /app/apps/api /backups
 
 USER node
 

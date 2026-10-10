@@ -29,12 +29,17 @@ jobs:
             [ "$($COMPOSE ps --format '{{.Health}}' api)" = "healthy" ] && exit 0; sleep 3
           done
           $COMPOSE logs; exit 1
-      - name: Provision admin and check endpoints
+      - name: Provision admin with a temporary strong password
         run: |
-          $COMPOSE run --rm -e ADMIN_PASSWORD='Verify-Pass-12345!' api node dist/src/ops/provisionAdmin.js --username owner --full-name 'CI Owner'
-          $COMPOSE exec -T api node -e "fetch('http://127.0.0.1:4000/health').then(r=>r.json()).then(console.log)"
-          $COMPOSE exec -T api node -e "fetch('http://127.0.0.1:4000/ready').then(r=>r.json()).then(console.log)"
-      - name: Backup and verified restore in containers
+          PW="Vf-$(openssl rand -hex 16)-Aa1!"
+          echo "::add-mask::$PW"
+          echo "VERIFY_ADMIN_PASSWORD=$PW" >> "$GITHUB_ENV"
+          $COMPOSE run --rm -e ADMIN_PASSWORD="$PW" api node dist/src/ops/provisionAdmin.js --username owner --full-name 'CI Owner'
+      - name: Health, readiness, auth and authenticated checkout in container
+        run: $COMPOSE exec -T -e VERIFY_ADMIN_PASSWORD="$VERIFY_ADMIN_PASSWORD" api node - < deploy/verify-checkout.mjs
+      - name: Web (nginx) serves the frontend and proxies the API
+        run: |
+          $COMPOSE exec -T web wget -qO- http://127.0.0.1:8080/ | head -c 200 || $COMPOSE exec -T web wget -qO- http://127.0.0.1/ | head -c 200      - name: Backup and verified restore in containers
         run: |
           $COMPOSE exec -T backup node dist/src/ops/backup.js
           $COMPOSE exec -T backup node dist/src/ops/verifyRestore.js
